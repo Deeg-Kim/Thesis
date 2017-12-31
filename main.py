@@ -20,7 +20,7 @@ import matplotlib.pyplot as plt
 from wavenet import WaveNetModel, AudioReader, optimizer_factory
 
 # GAN params
-num_epochs = 1
+NUM_EPOCHS = 1
 
 # Wavenet params
 BATCH_SIZE = 1
@@ -38,6 +38,9 @@ EPSILON = 0.001
 MOMENTUM = 0.9
 MAX_TO_KEEP = 5
 METADATA = False
+
+# Misc Params
+VIEW_INITIAL_WHITE = False
 
 def get_arguments():
     def _str_to_bool(s):
@@ -106,6 +109,9 @@ def get_arguments():
     parser.add_argument('--max_checkpoints', type=int, default=MAX_TO_KEEP,
                         help='Maximum amount of checkpoints that will be kept alive. Default: '
                              + str(MAX_TO_KEEP) + '.')
+    parser.add_argument('--view_initial_white', type=bool, default=VIEW_INITIAL_WHITE,
+                        help='View plot of initial input white news. Default: '
+                             + str(VIEW_INITIAL_WHITE) + '.')
     return parser.parse_args()
 
 def get_generator_input_sampler():
@@ -117,19 +123,20 @@ def main():
     white_sigma = 1
     white_length = 16000
 
-    initial_weight_setup = 5
 
     gi_sampler = get_generator_input_sampler()
-
-    # White noise verification plot
-    # plt.plot(gi_sampler(white_mean, white_sigma, white_length))
-    # plt.ylabel('Amplitude')
-    # plt.xlabel('Time')
-    # plt.show()
 
     args = get_arguments()
     sess = tf.Session()
     coord = tf.train.Coordinator()
+
+    # White noise generation and verification
+    white_noise = gi_sampler(white_mean, white_sigma, white_length)
+    if args.view_initial_white:
+        plt.plot(white_noise)
+        plt.ylabel('Amplitude')
+        plt.xlabel('Time')
+        plt.show()
 
     with open(args.wavenet_params, 'r') as f:
         wavenet_params = json.load(f)
@@ -145,7 +152,7 @@ def main():
         use_biases=wavenet_params["use_biases"],
         initial_filter_width=wavenet_params["initial_filter_width"])
 
-    loss = G.loss(input_batch=tf.convert_to_tensor(gi_sampler(white_mean, white_sigma, white_length), dtype=np.float32))
+    loss = G.loss(input_batch=tf.convert_to_tensor(white_noise, dtype=np.float32), name='generator')
     optimizer = optimizer_factory[args.optimizer](
                     learning_rate=args.learning_rate,
                     momentum=args.momentum)
@@ -153,12 +160,13 @@ def main():
     optim = optimizer.minimize(loss, var_list=trainable)
 
     print('--------- Begin dummy weight setup ---------')
-    for step in range(initial_weight_setup):
-        start_time = time.time()
-        loss_value, _ = sess.run([loss, optim])
-        duration = time.time() - start_time
-        print('step {:d} - loss = {:.3f}, ({:.3f} sec/step)'
-                  .format(step, loss_value, duration))
+    start_time = time.time()
+    init = tf.global_variables_initializer()
+    sess.run(init)
+    loss_value, _ = sess.run([loss, optim])
+    duration = time.time() - start_time
+    print('loss = {:.3f}, ({:.3f} sec/step)'
+        .format(loss_value, duration))
 
     # print('------------ Begin GAN learning ------------')
     # for epoch in range(num_epochs):
