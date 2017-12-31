@@ -42,6 +42,10 @@ METADATA = False
 # Misc Params
 VIEW_INITIAL_WHITE = False
 
+#########################################################
+# Modified boilerplate code from WaveNet implementation #
+#########################################################
+
 def get_arguments():
     def _str_to_bool(s):
         """Convert string to bool (in argparse context)."""
@@ -114,23 +118,118 @@ def get_arguments():
                              + str(VIEW_INITIAL_WHITE) + '.')
     return parser.parse_args()
 
+def save(saver, sess, logdir, step):
+    model_name = 'model.ckpt'
+    checkpoint_path = os.path.join(logdir, model_name)
+    print('Storing checkpoint to {} ...'.format(logdir), end="")
+    sys.stdout.flush()
+
+    if not os.path.exists(logdir):
+        os.makedirs(logdir)
+
+    saver.save(sess, checkpoint_path, global_step=step)
+    print(' Done.')
+
+def saveInit(saver, sess, logdir):
+    model_name = 'init.ckpt'
+    checkpoint_path = os.path.join(logdir, model_name)
+    print('Storing checkpoint to {} ...'.format(logdir), end="")
+    sys.stdout.flush()
+
+    if not os.path.exists(logdir):
+        os.makedirs(logdir)
+
+    saver.save(sess, checkpoint_path, global_step=0)
+    print(' Done.')
+
+def get_default_logdir(logdir_root):
+    logdir = os.path.join(logdir_root, 'train', STARTED_DATESTRING)
+    return logdir
+
+def get_init_logdir(logdir_root):
+    logdir = os.path.join(logdir_root, 'init', STARTED_DATESTRING)
+    return logdir
+
+def validate_directories(args):
+    """Validate and arrange directory related arguments."""
+
+    # Validation
+    if args.logdir and args.logdir_root:
+        raise ValueError("--logdir and --logdir_root cannot be "
+                         "specified at the same time.")
+
+    if args.logdir and args.restore_from:
+        raise ValueError(
+            "--logdir and --restore_from cannot be specified at the same "
+            "time. This is to keep your previous model from unexpected "
+            "overwrites.\n"
+            "Use --logdir_root to specify the root of the directory which "
+            "will be automatically created with current date and time, or use "
+            "only --logdir to just continue the training from the last "
+            "checkpoint.")
+
+    # Arrangement
+    logdir_root = args.logdir_root
+    if logdir_root is None:
+        logdir_root = LOGDIR_ROOT
+
+    logdir = args.logdir
+    if logdir is None:
+        logdirInit = get_init_logdir(logdir_root)
+        logdir = get_default_logdir(logdir_root)
+        print('Using default init logdir: {}'.format(logdirInit))
+        print('Using default training logdir: {}'.format(logdir))
+
+    restore_from = args.restore_from
+    if restore_from is None:
+        # args.logdir and args.restore_from are exclusive,
+        # so it is guaranteed the logdir here is newly created.
+        restore_from = logdir
+
+    return {
+        'logdir': logdir,
+        'logdirInit': logdirInit,
+        'logdir_root': args.logdir_root,
+        'restore_from': restore_from
+    }
+
+########################
+# End boilerplate code #
+########################
+
+# White noise generator lambda
 def get_generator_input_sampler():
     return lambda mu, sigma, n: np.random.normal(mu, sigma, size=n)
 
 def main():
-    # Generator params
-    white_mean = 0
-    white_sigma = 1
-    white_length = 16000
+    # Get default and command line parameters
+    args = get_arguments()
 
+    # Get logdir
+    try:
+        directories = validate_directories(args)
+    except ValueError as e:
+        print("Some arguments are wrong:")
+        print(str(e))
+        return
 
+    logdir = directories['logdir']
+    logdirInit = directories['logdirInit']
+
+    # Lambda for white noise sampler
     gi_sampler = get_generator_input_sampler()
 
-    args = get_arguments()
+    # Some TensorFlow setup variables
     sess = tf.Session()
     coord = tf.train.Coordinator()
 
     # White noise generation and verification
+
+    # White noise generator params
+    white_mean = 0
+    white_sigma = 1
+    white_length = 16000
+
     white_noise = gi_sampler(white_mean, white_sigma, white_length)
     if args.view_initial_white:
         plt.plot(white_noise)
@@ -138,9 +237,11 @@ def main():
         plt.xlabel('Time')
         plt.show()
 
+    # Load parameters from wavenet params json file
     with open(args.wavenet_params, 'r') as f:
         wavenet_params = json.load(f)
 
+    # Initialize generator WaveNet
     G = WaveNetModel(
         batch_size=1,
         dilations=wavenet_params["dilations"],
@@ -152,6 +253,7 @@ def main():
         use_biases=wavenet_params["use_biases"],
         initial_filter_width=wavenet_params["initial_filter_width"])
 
+    # Calculate loss for white noise input
     loss = G.loss(input_batch=tf.convert_to_tensor(white_noise, dtype=np.float32), name='generator')
     optimizer = optimizer_factory[args.optimizer](
                     learning_rate=args.learning_rate,
@@ -159,14 +261,18 @@ def main():
     trainable = tf.trainable_variables()
     optim = optimizer.minimize(loss, var_list=trainable)
 
+    # Saver for storing checkpoints of the model.
+    saver = tf.train.Saver(var_list=tf.trainable_variables(), max_to_keep=args.max_checkpoints)
+
     print('--------- Begin dummy weight setup ---------')
     start_time = time.time()
     init = tf.global_variables_initializer()
     sess.run(init)
     loss_value, _ = sess.run([loss, optim])
     duration = time.time() - start_time
-    print('loss = {:.3f}, ({:.3f} sec/step)'
-        .format(loss_value, duration))
+    print('loss = {:.3f}, ({:.3f} sec)'.format(loss_value, duration))
+
+    saveInit(saver, sess, logdirInit)
 
     # print('------------ Begin GAN learning ------------')
     # for epoch in range(num_epochs):
