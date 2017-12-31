@@ -15,6 +15,8 @@ from tensorflow.python.client import timeline
 
 import numpy as np
 
+import matplotlib.pyplot as plt
+
 from wavenet import WaveNetModel, AudioReader, optimizer_factory
 
 # GAN params
@@ -113,17 +115,27 @@ def main():
     # Generator params
     white_mean = 0
     white_sigma = 1
-    white_length = 44100
+    white_length = 16000
+
+    initial_weight_setup = 5
 
     gi_sampler = get_generator_input_sampler()
 
+    # White noise verification plot
+    # plt.plot(gi_sampler(white_mean, white_sigma, white_length))
+    # plt.ylabel('Amplitude')
+    # plt.xlabel('Time')
+    # plt.show()
+
     args = get_arguments()
+    sess = tf.Session()
+    coord = tf.train.Coordinator()
 
     with open(args.wavenet_params, 'r') as f:
         wavenet_params = json.load(f)
 
     G = WaveNetModel(
-        batch_size=args.batch_size,
+        batch_size=1,
         dilations=wavenet_params["dilations"],
         filter_width=wavenet_params["filter_width"],
         residual_channels=wavenet_params["residual_channels"],
@@ -131,30 +143,28 @@ def main():
         skip_channels=wavenet_params["skip_channels"],
         quantization_channels=wavenet_params["quantization_channels"],
         use_biases=wavenet_params["use_biases"],
-        scalar_input=wavenet_params["scalar_input"],
-        initial_filter_width=wavenet_params["initial_filter_width"],
-        histograms=args.histograms)
-    
-    # Set up session
-    sess = tf.Session(config=tf.ConfigProto(log_device_placement=False))
-    init = tf.global_variables_initializer()
-    sess.run(init)
+        initial_filter_width=wavenet_params["initial_filter_width"])
 
-    for epoch in range(num_epochs):
-        start_time = time.time()
-        gen_input = tf.convert_to_tensor(gi_sampler(white_mean, white_sigma, white_length), np.float32)
-        loss = G.loss(input_batch=gen_input)
-
-        optimizer = optimizer_factory[args.optimizer](
+    loss = G.loss(input_batch=tf.convert_to_tensor(gi_sampler(white_mean, white_sigma, white_length), dtype=np.float32))
+    optimizer = optimizer_factory[args.optimizer](
                     learning_rate=args.learning_rate,
                     momentum=args.momentum)
-        trainable = tf.trainable_variables()
-        optim = optimizer.minimize(loss, var_list=trainable)
+    trainable = tf.trainable_variables()
+    optim = optimizer.minimize(loss, var_list=trainable)
 
+    print('--------- Begin dummy weight setup ---------')
+    for step in range(initial_weight_setup):
+        start_time = time.time()
         loss_value, _ = sess.run([loss, optim])
-
         duration = time.time() - start_time
-        print('step {:d} - loss = {:.3f}, ({:.3f} sec/step)'.format(epoch, loss_value, duration))
+        print('step {:d} - loss = {:.3f}, ({:.3f} sec/step)'
+                  .format(step, loss_value, duration))
+
+    # print('------------ Begin GAN learning ------------')
+    # for epoch in range(num_epochs):
+    #    samples = tf.placeholder(tf.int32)
+    #    next_sample = G.predict_proba(samples)
+    #    print(sess.run(next_sample))
 
 if __name__ == '__main__':
     main()
