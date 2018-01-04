@@ -79,6 +79,11 @@ def get_arguments():
                         'This creates the new model under the dated directory '
                         'in --logdir_root. '
                         'Cannot use with --logdir.')
+    parser.add_argument('--restore_from_init', type=str, default=None,
+                        help='Directory in which to restore the initialization from. '
+                        'This creates the new model under the dated directory '
+                        'in --logdir_root. '
+                        'Cannot use with --logdir.')
     parser.add_argument('--checkpoint_every', type=int,
                         default=CHECKPOINT_EVERY,
                         help='How many steps to save each checkpoint after. Default: ' + str(CHECKPOINT_EVERY) + '.')
@@ -130,6 +135,25 @@ def save(saver, sess, logdir, step):
     saver.save(sess, checkpoint_path, global_step=step)
     print(' Done.')
 
+def load(saver, sess, logdir):
+    print("Trying to restore saved checkpoints from {} ...".format(logdir),
+          end="")
+
+    ckpt = tf.train.get_checkpoint_state(logdir)
+    if ckpt:
+        print("  Checkpoint found: {}".format(ckpt.model_checkpoint_path))
+        global_step = int(ckpt.model_checkpoint_path
+                          .split('/')[-1]
+                          .split('-')[-1])
+        print("  Global step was: {}".format(global_step))
+        print("  Restoring...", end="")
+        saver.restore(sess, ckpt.model_checkpoint_path)
+        print(" Done.")
+        return global_step
+    else:
+        print(" No checkpoint found.")
+        return None
+
 def saveInit(saver, sess, logdir):
     model_name = 'init.ckpt'
     checkpoint_path = os.path.join(logdir, model_name)
@@ -139,7 +163,7 @@ def saveInit(saver, sess, logdir):
     if not os.path.exists(logdir):
         os.makedirs(logdir)
 
-    saver.save(sess, checkpoint_path, global_step=0)
+    saver.save(sess, checkpoint_path, global_step=1)
     print(' Done.')
 
 def get_default_logdir(logdir_root):
@@ -168,6 +192,8 @@ def validate_directories(args):
             "only --logdir to just continue the training from the last "
             "checkpoint.")
 
+    # TODO: restore_from_init and logdir validation
+
     # Arrangement
     logdir_root = args.logdir_root
     if logdir_root is None:
@@ -175,9 +201,9 @@ def validate_directories(args):
 
     logdir = args.logdir
     if logdir is None:
-        logdirInit = get_init_logdir(logdir_root)
+        logdir_init = get_init_logdir(logdir_root)
         logdir = get_default_logdir(logdir_root)
-        print('Using default init logdir: {}'.format(logdirInit))
+        print('Using default init logdir: {}'.format(logdir_init))
         print('Using default training logdir: {}'.format(logdir))
 
     restore_from = args.restore_from
@@ -186,11 +212,16 @@ def validate_directories(args):
         # so it is guaranteed the logdir here is newly created.
         restore_from = logdir
 
+    restore_from_init = args.restore_from_init
+    if restore_from_init is None:
+        restore_from_init = logdir
+
     return {
         'logdir': logdir,
-        'logdirInit': logdirInit,
+        'logdir_init': logdir_init,
         'logdir_root': args.logdir_root,
-        'restore_from': restore_from
+        'restore_from': restore_from,
+        'restore_from_init': restore_from_init
     }
 
 ########################
@@ -214,7 +245,9 @@ def main():
         return
 
     logdir = directories['logdir']
-    logdirInit = directories['logdirInit']
+    logdir_init = directories['logdir_init']
+    restore_from = directories['restore_from']
+    restore_from_init = directories['restore_from_init']
 
     # Lambda for white noise sampler
     gi_sampler = get_generator_input_sampler()
@@ -239,7 +272,7 @@ def main():
 
     # Load parameters from wavenet params json file
     with open(args.wavenet_params, 'r') as f:
-        wavenet_params = json.load(f)
+        wavenet_params = json.load(f)  
 
     # Initialize generator WaveNet
     G = WaveNetModel(
@@ -264,21 +297,38 @@ def main():
     # Saver for storing checkpoints of the model.
     saver = tf.train.Saver(var_list=tf.trainable_variables(), max_to_keep=args.max_checkpoints)
 
-    print('--------- Begin dummy weight setup ---------')
-    start_time = time.time()
     init = tf.global_variables_initializer()
     sess.run(init)
-    loss_value, _ = sess.run([loss, optim])
-    duration = time.time() - start_time
-    print('loss = {:.3f}, ({:.3f} sec)'.format(loss_value, duration))
 
-    saveInit(saver, sess, logdirInit)
+    try:
+        init_step = load(saver, sess, restore_from_init)
+        if init_step is None:
+            init_step = -1
 
-    # print('------------ Begin GAN learning ------------')
-    # for epoch in range(num_epochs):
-    #    samples = tf.placeholder(tf.int32)
-    #    next_sample = G.predict_proba(samples)
-    #    print(sess.run(next_sample))
+    except:
+        print("Something went wrong while restoring checkpoint. "
+              "We will terminate training to avoid accidentally overwriting "
+              "the previous model.")
+        raise
+
+    if init_step == -1:
+        print('--------- Begin dummy weight setup ---------')
+        start_time = time.time()
+        loss_value, _ = sess.run([loss, optim])
+        duration = time.time() - start_time
+        print('loss = {:.3f}, ({:.3f} sec)'.format(loss_value, duration))
+
+    else: 
+        print('---------- Loading initial weight ----------')
+        print('... Done')
+
+    saveInit(saver, sess, logdir_init)
+
+    print('------------ Begin GAN learning ------------')
+    for epoch in range(NUM_EPOCHS):
+        samples = tf.placeholder(tf.int32)
+        next_sample = G.predict_proba(samples)
+        print(sess.run(next_sample))
 
 if __name__ == '__main__':
     main()
