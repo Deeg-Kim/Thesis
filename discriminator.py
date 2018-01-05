@@ -34,19 +34,12 @@ def convert_dequeue_to_list(dequeued):
 
     return data
 
-def fill_feed_dict(sess, coord, inputs_pl, labels_pl, batch_size):
+def fill_feed_dict(batch_data, inputs_pl, labels_pl, batch_size):
     # Feed dict for placeholders from placeholder_inputs()
-    directory = './sample1'
-
-    reader = AudioReader(directory, coord, sample_rate = 16000, gc_enabled=False, receptive_field=5117, sample_size=10000, silence_threshold=0.1)
-    threads = tf.train.start_queue_runners(sess=sess, coord=coord)
-    reader.start_threads(sess)
-
     inputs_feed = []
     labels_feed = np.ones((batch_size), dtype=np.int32)
 
     for batch in range(batch_size):
-        batch_data = sess.run(reader.dequeue(1))
         list_data = convert_dequeue_to_list(batch_data)
 
         inputs_feed.append(list_data)
@@ -105,7 +98,7 @@ def main():
         hidden1_units = 7884
         hidden2_units = 5256
         hidden3_units = 2628
-        max_steps = 500
+        max_steps = 1000
         learning_rate = 1e-3
 
         inputs_placeholder, labels_placeholder = placeholder_inputs(batch_size)
@@ -143,10 +136,16 @@ def main():
                   "the previous model.")
             raise
 
+        directory = './sample1'
+        reader = AudioReader(directory, coord, sample_rate = 16000, gc_enabled=False, receptive_field=5117, sample_size=10000, silence_threshold=0.1)
+        threads = tf.train.start_queue_runners(sess=sess, coord=coord)
+        reader.start_threads(sess)
+
         for step in range(saved_global_step + 1, max_steps):
             start_time = time.time()
 
-            feed_dict = fill_feed_dict(sess, coord, inputs_placeholder, labels_placeholder, batch_size)
+            batch_data = sess.run(reader.dequeue(1))
+            feed_dict = fill_feed_dict(batch_data, inputs_placeholder, labels_placeholder, batch_size)
 
             _, loss_value = sess.run([train_op, loss], feed_dict=feed_dict)
 
@@ -158,8 +157,9 @@ def main():
             summary_writer.add_summary(summary_str, step)
             summary_writer.flush()
 
-            if (step + 1) % 10 == 0 or (step + 1) == max_steps:
+            if (step + 1) % 100 == 0 or (step + 1) == max_steps:
                 checkpoint_file = os.path.join('./logdir/init-train/', 'model.ckpt')
+                print("Saving!")
                 saver.save(sess, checkpoint_file, global_step=step)
 
 if __name__ == '__main__':
