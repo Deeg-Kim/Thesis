@@ -60,20 +60,52 @@ def fill_feed_dict(sess, coord, inputs_pl, labels_pl, batch_size):
 
     return feed_dict
 
+def load(saver, sess, logdir):
+    print("Trying to restore saved checkpoints from {} ...".format(logdir),
+          end="")
+
+    ckpt = tf.train.get_checkpoint_state(logdir)
+    if ckpt:
+        print("  Checkpoint found: {}".format(ckpt.model_checkpoint_path))
+        global_step = int(ckpt.model_checkpoint_path
+                          .split('/')[-1]
+                          .split('-')[-1])
+        print("  Global step was: {}".format(global_step))
+        print("  Restoring...", end="")
+        saver.restore(sess, ckpt.model_checkpoint_path)
+        print(" Done.")
+        return global_step
+    else:
+        print(" No checkpoint found.")
+        return None
+
+def get_arguments():
+    def _str_to_bool(s):
+        """Convert string to bool (in argparse context)."""
+        if s.lower() not in ['true', 'false']:
+            raise ValueError('Argument needs to be a '
+                             'boolean, got {}'.format(s))
+        return {'true': True, 'false': False}[s.lower()]
+    
+    parser = argparse.ArgumentParser(description='Simple feedforward neural network')
+    parser.add_argument('--restore_from', type=str, default=None,
+                        help='Directory in which to restore the model from. '
+                        'This creates the new model under the dated directory '
+                        'in --logdir_root. '
+                        'Cannot use with --logdir.')
+    return parser.parse_args()
+
 def main():
 
     with tf.Graph().as_default():
         coord = tf.train.Coordinator()
         sess = tf.Session()
 
-        # data = reader.dequeue(1)
-        # data = sess.run(data)
-
         batch_size = 100
         hidden1_units = 7884
         hidden2_units = 5256
         hidden3_units = 2628
-        max_steps = 100
+        max_steps = 500
         learning_rate = 1e-3
 
         inputs_placeholder, labels_placeholder = placeholder_inputs(batch_size)
@@ -91,7 +123,27 @@ def main():
 
         sess.run(init)
 
-        for step in range(max_steps):
+        args = get_arguments()
+
+        if args.restore_from != None:
+            restore_from = args.restore_from
+            print("Restoring from: ")
+            print(restore_from)
+
+        try:
+            saved_global_step = load(saver, sess, restore_from)
+            if saved_global_step is None:
+                # The first training step will be saved_global_step + 1,
+                # therefore we put -1 here for new or overwritten trainings.
+                saved_global_step = -1
+
+        except:
+            print("Something went wrong while restoring checkpoint. "
+                  "We will terminate training to avoid accidentally overwriting "
+                  "the previous model.")
+            raise
+
+        for step in range(saved_global_step + 1, max_steps):
             start_time = time.time()
 
             feed_dict = fill_feed_dict(sess, coord, inputs_placeholder, labels_placeholder, batch_size)
