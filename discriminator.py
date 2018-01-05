@@ -123,6 +123,9 @@ def main():
             print("Restoring from: ")
             print(restore_from)
 
+        else:
+            restore_from = ""
+
         try:
             saved_global_step = load(saver, sess, restore_from)
             if saved_global_step is None:
