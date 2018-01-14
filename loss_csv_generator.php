@@ -49,6 +49,12 @@
 					$stepData = array();
 
 					for ($i = 0; $i < count($data); $i++) {
+						$first = substr($data[$i], 0, 4);
+
+						if ($first != "Step") {
+							continue;
+						}
+
 						$dataPoint = array();
 
 						$stripStep = substr($data[$i], 5);
