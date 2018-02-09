@@ -4,6 +4,7 @@ from __future__ import division
 from __future__ import print_function
 
 from datetime import datetime
+from random import *
 import argparse
 import os
 import sys
@@ -34,15 +35,28 @@ def convert_dequeue_to_list(dequeued):
 
     return data
 
-def fill_feed_dict(batch_data, inputs_pl, labels_pl, batch_size):
+def dequeue_to_list_standardize(dequeued):
+    data = np.array(dequeued)
+    mean = np.mean(data)
+    std = np.std(data)
+
+    standardized = []
+
+    for d in data:
+        standardized.append(float(d-mean)/std)
+
+    return standardized
+"""
+def fill_feed_dict(batch_data, inputs_pl, labels_pl, batch_size, label):
     # Feed dict for placeholders from placeholder_inputs()
     inputs_feed = []
-    labels_feed = np.ones((batch_size), dtype=np.int32)
+    labels_feed = []
 
     for batch in range(batch_size):
-        list_data = convert_dequeue_to_list(batch_data)
+        list_data = dequeue_to_list_standardize(batch_data)
 
         inputs_feed.append(list_data)
+        labels_feed.append(label)
 
     inputs_feed = np.array(inputs_feed, dtype=np.float32)
 
@@ -52,6 +66,51 @@ def fill_feed_dict(batch_data, inputs_pl, labels_pl, batch_size):
     }
 
     return feed_dict
+"""
+
+def fill_feed_dict(batch_data, label_data, inputs_pl, labels_pl):
+    # Feed dict for placeholders from placeholder_inputs()
+
+    feed_dict = {
+        inputs_pl: batch_data,
+        labels_pl: label_data
+    }
+
+    return feed_dict
+
+def do_eval(sess, eval_correct, inputs_placeholder, labels_placeholder, batch_data, batch_size, eval_type):
+    # Run one epch of evaluation
+    true_count = 0
+
+    # TODO: Don't hardcode number of examples
+    if eval_type == 'trainingTrue':
+        steps_per_epoch = 35
+        label = True
+    if eval_type == 'trainingFalse':
+        steps_per_epoch = 35
+        label = False
+    elif eval_type == 'validationTrue':
+        steps_per_epoch = 9
+        label = True
+    elif eval_type == 'validationFalse':
+        steps_per_epoch = 9
+        label = False
+    elif eval_type == 'testTrue':
+        steps_per_epoch = 11
+        label = True
+    elif eval_type == 'testFalse':
+        steps_per_epoch = 11
+        label = False
+
+    num_examples = steps_per_epoch * batch_size
+
+    for step in range(steps_per_epoch):
+        feed_dict = fill_feed_dict(batch_data, inputs_placeholder, labels_placeholder, label)
+        true_count += sess.run(eval_correct, feed_dict=feed_dict)
+
+    precision = float(true_count) / num_examples
+
+    print('  Num examples: %d  Num correct: %d  Precision @ 1: %0.04f' % (num_examples, true_count, precision))
 
 def load(saver, sess, logdir):
     print("Trying to restore saved checkpoints from {} ...".format(logdir),
@@ -94,16 +153,22 @@ def main():
         coord = tf.train.Coordinator()
         sess = tf.Session()
 
-        batch_size = 100
-        hidden1_units = 7884
-        hidden2_units = 5256
-        hidden3_units = 2628
+        batch_size = 10
+        hidden1_units = 5202
+        hidden2_units = 2601
+        hidden3_units = 1300
+        hidden4_units = 650
+        hidden5_units = 325
         max_steps = 1000
-        learning_rate = 1e-3
+        learning_rate = 1e-2
+        print('Learning Rate:')
+        print(learning_rate)
+        print('Layers')
+        print(5)
 
         inputs_placeholder, labels_placeholder = placeholder_inputs(batch_size)
 
-        logits = ffnn.inference(inputs_placeholder, hidden1_units, hidden2_units, hidden3_units)
+        logits = ffnn.inference(inputs_placeholder, hidden1_units, hidden2_units, hidden3_units, hidden4_units, hidden5_units)
         loss = ffnn.loss(logits, labels_placeholder)
         train_op = ffnn.training(loss, learning_rate)
         eval_correct = ffnn.evaluation(logits, labels_placeholder)
@@ -132,6 +197,8 @@ def main():
                 # The first training step will be saved_global_step + 1,
                 # therefore we put -1 here for new or overwritten trainings.
                 saved_global_step = -1
+            else:
+                counter = saved_global_step % label_batch_size
 
         except:
             print("Something went wrong while restoring checkpoint. "
@@ -139,16 +206,63 @@ def main():
                   "the previous model.")
             raise
 
-        directory = './sample1'
-        reader = AudioReader(directory, coord, sample_rate = 16000, gc_enabled=False, receptive_field=5117, sample_size=10000, silence_threshold=0.1)
+        # TODO: Find a more robust way to find different data sets
+
+        # Training data 
+        directory = './sampleTrue'
+        reader = AudioReader(directory, coord, sample_rate = 16000, gc_enabled=False, receptive_field=5117, sample_size=10000, silence_threshold=0.05)
         threads = tf.train.start_queue_runners(sess=sess, coord=coord)
         reader.start_threads(sess)
+
+        directory = './sampleFalse'
+        reader2 = AudioReader(directory, coord, sample_rate = 16000, gc_enabled=False, receptive_field=5117, sample_size=10000, silence_threshold=0.05)
+        threads2 = tf.train.start_queue_runners(sess=sess, coord=coord)
+        reader2.start_threads(sess)
 
         for step in range(saved_global_step + 1, max_steps):
             start_time = time.time()
 
-            batch_data = sess.run(reader.dequeue(1))
-            feed_dict = fill_feed_dict(batch_data, inputs_placeholder, labels_placeholder, batch_size)
+            """
+            rand = randint(0, 1)
+
+            if rand == 1:
+                batch_data = sess.run(reader.dequeue(1))
+                feed_dict = fill_feed_dict(batch_data, inputs_placeholder, labels_placeholder, batch_size, 1)
+            else:
+                batch_data = sess.run(reader2.dequeue(1))
+                feed_dict = fill_feed_dict(batch_data, inputs_placeholder, labels_placeholder, batch_size, 0)
+            """
+
+            batch_data = []
+            label_data = []
+
+            for b in range(batch_size):
+                label = randint(0, 1)
+
+                if label == 1:
+                    data = sess.run(reader.dequeue(1))
+
+                    while (len(data[0]) < ffnn.INPUT_SIZE):
+                        data = sess.run(reader.dequeue(1))
+                else:
+                    data = sess.run(reader2.dequeue(1))
+
+                    while (len(data[0]) < ffnn.INPUT_SIZE):
+                        data = sess.run(reader2.dequeue(1))
+
+                data = np.array(data[0])
+                mean = np.mean(data)
+                std = np.std(data)
+
+                standardized = []
+
+                for d in data:
+                    standardized.append(float(d-mean)/std)
+
+                batch_data.append(standardized)
+                label_data.append(label)
+
+            feed_dict = fill_feed_dict(batch_data, label_data, inputs_placeholder, labels_placeholder)
 
             _, loss_value = sess.run([train_op, loss], feed_dict=feed_dict)
 
@@ -160,10 +274,18 @@ def main():
             summary_writer.add_summary(summary_str, step)
             summary_writer.flush()
 
-            if (step + 1) % 100 == 0 or (step + 1) == max_steps:
+            if step % 100 == 0 or (step + 1) == max_steps:
+                # TODO: Update train script to add data to new directory
                 checkpoint_file = os.path.join('./logdir/init-train/', 'model.ckpt')
-                print("Saving!")
+                print("Generating checkpoint file...")
                 saver.save(sess, checkpoint_file, global_step=step)
+
+            """
+            if (step + 1) % 500 == 0
+                print('Training Data Eval:')
+                batch_data = sess.run(reader.dequeue(1))
+                do_eval(sess, eval_correct, inputs_placeholder, labels_placeholder, batch_data, batch_size, "training")
+            """
 
 if __name__ == '__main__':
     main()

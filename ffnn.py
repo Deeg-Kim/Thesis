@@ -14,7 +14,8 @@ NUM_CLASSES = 2
 # Input size
 INPUT_SIZE = 15117
 
-def inference(inputs, hidden1_units, hidden2_units, hidden3_units):
+# TODO: more easily paramatrizable layers
+def inference(inputs, hidden1_units, hidden2_units, hidden3_units, hidden4_units, hidden5_units):
     # Builds the graph as far as needed to return the tensor that would contain the output predicitions.
 
     # Hidden layer 1
@@ -35,6 +36,7 @@ def inference(inputs, hidden1_units, hidden2_units, hidden3_units):
             name='biases')
         hidden2 = tf.nn.relu(tf.matmul(hidden1, weights) + biases)
 
+    
     # Hidden layer 3
     with tf.name_scope('hidden3'):
         weights = tf.Variable(tf.truncated_normal([hidden2_units, hidden3_units],
@@ -42,16 +44,34 @@ def inference(inputs, hidden1_units, hidden2_units, hidden3_units):
             name='weights')
         biases = tf.Variable(tf.zeros([hidden3_units]),
             name='biases')
-        hidden3 = tf.nn.relu(tf.matmul(hidden2, weights) + biases)
+        hidden3 = tf.nn.relu(tf.matmul(hidden2, weights) + biases) 
 
+    # Hidden layer 4
+    with tf.name_scope('hidden4'):
+        weights = tf.Variable(tf.truncated_normal([hidden3_units, hidden4_units],
+            stddev=1.0/math.sqrt(float(hidden3_units))),
+            name='weights')
+        biases = tf.Variable(tf.zeros([hidden4_units]),
+            name='biases')
+        hidden4 = tf.nn.relu(tf.matmul(hidden3, weights) + biases) 
+
+    # Hidden layer 5
+    with tf.name_scope('hidden5'):
+        weights = tf.Variable(tf.truncated_normal([hidden4_units, hidden5_units],
+            stddev=1.0/math.sqrt(float(hidden4_units))),
+            name='weights')
+        biases = tf.Variable(tf.zeros([hidden5_units]),
+            name='biases')
+        hidden5 = tf.nn.relu(tf.matmul(hidden4, weights) + biases) 
+        
     # Linear
     with tf.name_scope('softmax_linear'):
-        weights = tf.Variable(tf.truncated_normal([hidden3_units, NUM_CLASSES],
-            stddev=1.0/math.sqrt(float(hidden3_units))),
+        weights = tf.Variable(tf.truncated_normal([hidden5_units, NUM_CLASSES],
+            stddev=1.0/math.sqrt(float(hidden5_units))),
             name='weights')
         biases = tf.Variable(tf.zeros([NUM_CLASSES]),
             name='biases')
-        logits = tf.matmul(hidden3, weights) + biases
+        logits = tf.matmul(hidden5, weights) + biases
 
     return logits
 
