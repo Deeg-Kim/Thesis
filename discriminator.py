@@ -160,17 +160,22 @@ def main():
         hidden4_units = 650
         hidden5_units = 325
         max_steps = 1000
+        """
         learning_rate = 1e-2
         print('Learning Rate:')
         print(learning_rate)
         print('Layers')
         print(5)
+        """
+        global_step = tf.Variable(0, name='global_step', trainable=False)
+        initial_learning_rate = 4e-2
+        learning_rate = tf.train.exponential_decay(initial_learning_rate, global_step, 100, 0.95, staircase=True)
 
         inputs_placeholder, labels_placeholder = placeholder_inputs(batch_size)
 
         logits = ffnn.inference(inputs_placeholder, hidden1_units, hidden2_units, hidden3_units, hidden4_units, hidden5_units)
         loss = ffnn.loss(logits, labels_placeholder)
-        train_op = ffnn.training(loss, learning_rate)
+        train_op = ffnn.training(loss, learning_rate, global_step)
         eval_correct = ffnn.evaluation(logits, labels_placeholder)
 
         summary = tf.summary.merge_all()
@@ -219,22 +224,15 @@ def main():
         threads2 = tf.train.start_queue_runners(sess=sess, coord=coord)
         reader2.start_threads(sess)
 
+        total_loss = 0
         for step in range(saved_global_step + 1, max_steps):
             start_time = time.time()
 
-            """
-            rand = randint(0, 1)
-
-            if rand == 1:
-                batch_data = sess.run(reader.dequeue(1))
-                feed_dict = fill_feed_dict(batch_data, inputs_placeholder, labels_placeholder, batch_size, 1)
-            else:
-                batch_data = sess.run(reader2.dequeue(1))
-                feed_dict = fill_feed_dict(batch_data, inputs_placeholder, labels_placeholder, batch_size, 0)
-            """
-
             batch_data = []
             label_data = []
+
+            if (step % 100 == 0):
+                print('Current learning rate: %6f' % (sess.run(learning_rate)))
 
             for b in range(batch_size):
                 label = randint(0, 1)
@@ -267,6 +265,7 @@ def main():
             _, loss_value = sess.run([train_op, loss], feed_dict=feed_dict)
 
             duration = time.time() - start_time
+            total_loss = total_loss + loss_value
 
             print('Step %d: loss = %.7f (%.3f sec)' % (step, loss_value, duration))
 
@@ -275,6 +274,8 @@ def main():
             summary_writer.flush()
 
             if step % 100 == 0 or (step + 1) == max_steps:
+                average = total_loss / (step + 1)
+                print('Cumulative average loss: %6f' % (average))
                 # TODO: Update train script to add data to new directory
                 checkpoint_file = os.path.join('./logdir/init-train/', 'model.ckpt')
                 print("Generating checkpoint file...")

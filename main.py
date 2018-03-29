@@ -261,7 +261,7 @@ def main():
     # White noise generator params
     white_mean = 0
     white_sigma = 1
-    white_length = 16000
+    white_length = 20234
 
     white_noise = gi_sampler(white_mean, white_sigma, white_length)
     if args.view_initial_white:
@@ -287,7 +287,10 @@ def main():
         initial_filter_width=wavenet_params["initial_filter_width"])
 
     # Calculate loss for white noise input
-    loss = G.loss(input_batch=tf.convert_to_tensor(white_noise, dtype=np.float32), name='generator')
+    # loss = G.loss(input_batch=tf.convert_to_tensor(white_noise, dtype=np.float32), name='generator')
+    result = G.loss(input_batch=tf.convert_to_tensor(white_noise, dtype=np.float32), name='generator')
+    loss = result['loss']
+    output = result['output']
     optimizer = optimizer_factory[args.optimizer](
                     learning_rate=args.learning_rate,
                     momentum=args.momentum)
@@ -314,7 +317,7 @@ def main():
     if init_step == -1:
         print('--------- Begin dummy weight setup ---------')
         start_time = time.time()
-        loss_value, _ = sess.run([loss, optim])
+        loss_value, _, output_value = sess.run([loss, optim, output])
         duration = time.time() - start_time
         print('loss = {:.3f}, ({:.3f} sec)'.format(loss_value, duration))
 
@@ -322,13 +325,7 @@ def main():
         print('---------- Loading initial weight ----------')
         print('... Done')
 
-    saveInit(saver, sess, logdir_init)
-
-    print('------------ Begin GAN learning ------------')
-    for epoch in range(NUM_EPOCHS):
-        samples = tf.placeholder(tf.int32)
-        next_sample = G.predict_proba(samples)
-        print(sess.run(next_sample))
+    # saveInit(saver, sess, logdir_init)
 
 if __name__ == '__main__':
     main()
