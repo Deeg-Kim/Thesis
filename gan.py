@@ -19,7 +19,7 @@ import matplotlib.pyplot as plt
 
 import ffnn
 
-from wavenet import WaveNetModel, AudioReader, optimizer_factory, mu_law_decode, mu_law_encode
+from wavenet import WaveNetModel, AudioReader, optimizer_factory, mu_law_decode
 
 # GAN params
 NUM_EPOCHS = 10
@@ -102,6 +102,19 @@ def load(saver, sess, logdir):
     else:
         print(" No checkpoint found.")
         return None
+
+def manual_mu_law_encode(signal, quantization_channels):
+    # Manual mu-law companding and mu-bits quantization
+    mu = quantization_channels - 1
+
+    magnitude = np.log1p(mu * np.abs(signal)) / np.log1p(mu)
+    signal = np.sign(signal) * magnitude
+
+    # Map signal from [-1, +1] to [0, mu-1]
+    signal = (signal + 1) / 2 * mu + 0.5
+    quantized_signal = signal.astype(np.int32)
+
+    return quantized_signal
 
 def get_arguments():
     def _str_to_bool(s):
@@ -212,7 +225,7 @@ def main():
         hidden3_units = 1300
         hidden4_units = 650
         hidden5_units = 325
-        max_training_steps = 5
+        max_training_steps = 10
 
         global_step = tf.Variable(0, name='global_step', trainable=False)
         initial_training_learning_rate = 3e-2
@@ -271,6 +284,7 @@ def main():
         threads2 = tf.train.start_queue_runners(sess=sess, coord=coord)
         reader2.start_threads(sess)
 
+
         total_loss = 0
         for step in range(saved_global_step + 1, max_training_steps):
             start_time = time.time()
@@ -286,25 +300,36 @@ def main():
 
                 if label == 1:
                     data = sess.run(reader.dequeue(1))
-
                     while (len(data[0]) < ffnn.INPUT_SIZE):
                         data = sess.run(reader.dequeue(1))
                 else:
                     data = sess.run(reader2.dequeue(1))
-
                     while (len(data[0]) < ffnn.INPUT_SIZE):
                         data = sess.run(reader2.dequeue(1))
-
                 data = np.array(data[0])
-                mean = np.mean(data)
-                std = np.std(data)
+
+                # mu law encode
+                encoded = manual_mu_law_encode(data, 256)
+
+                # standardize
+                mean = np.mean(encoded)
+                std = np.std(encoded)
 
                 standardized = []
 
-                for d in data:
+                for d in encoded:
                     standardized.append(float(d-mean)/std)
 
-                batch_data.append(standardized)
+                # normalize
+                maximum = np.max(standardized)
+                minimum = np.min(standardized)
+
+                normalized = []
+
+                for d in standardized:
+                    normalized.append((d-minimum) * float(1/(maximum - minimum)))
+
+                batch_data.append(normalized)
                 label_data.append(label)
 
             feed_dict = fill_feed_dict(batch_data, label_data, inputs_placeholder, labels_placeholder)
@@ -316,9 +341,6 @@ def main():
 
             print('Step %d: loss = %.7f (%.3f sec)' % (step, loss_value, duration))
 
-            summary_str = sess.run(summary, feed_dict=feed_dict)
-            summary_writer.add_summary(summary_str, step)
-            summary_writer.flush()
             '''
             if step % 100 == 0 or (step + 1) == max_training_steps:
                 average = total_loss / (step + 1)
@@ -328,12 +350,6 @@ def main():
                 print("Generating checkpoint file...")
                 saver.save(sess, checkpoint_file, global_step=step)
             '''
-
-        testData = sess.run(reader.dequeue(1))
-        testData = testData[0]
-        testData = mu_law_encode(testData, 256)
-
-        print(testData)
 
         # Lambda for white noise sampler
         gi_sampler = get_generator_input_sampler()
@@ -356,7 +372,7 @@ def main():
         with open(args.wavenet_params, 'r') as f:
             wavenet_params = json.load(f)  
 
-        # Initialize generator WaveNet
+        # Intialize generator WaveNet
         G = WaveNetModel(
             batch_size=1,
             dilations=wavenet_params["dilations"],
