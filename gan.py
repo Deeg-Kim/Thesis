@@ -248,13 +248,13 @@ def main():
         coord = tf.train.Coordinator()
         sess = tf.Session()
 
-        batch_size = 10
+        batch_size = 1
         hidden1_units = 5202
         hidden2_units = 2601
         hidden3_units = 1300
         hidden4_units = 650
         hidden5_units = 325
-        max_training_steps = 10
+        max_training_steps = 5
 
         global_step = tf.Variable(0, name='global_step', trainable=False)
         initial_training_learning_rate = 3e-2
@@ -318,7 +318,6 @@ def main():
         reader2 = AudioReader(directory, coord, sample_rate = 16000, gc_enabled=False, receptive_field=5117, sample_size=10000, silence_threshold=0.05)
         threads2 = tf.train.start_queue_runners(sess=sess, coord=coord)
         reader2.start_threads(sess)
-
 
         total_loss = 0
         for step in range(saved_global_step + 1, max_training_steps):
@@ -396,8 +395,155 @@ def main():
         white_noise = gi_sampler(white_mean, white_sigma, white_length)
 
         # initialize generator
-        loss = G.loss(input_batch=tf.convert_to_tensor(white_noise, dtype=np.float32), name='generator')
+        g_loss = G.loss(input_batch=tf.convert_to_tensor(white_noise, dtype=np.float32), name='generator')
         
+        G_variables = tf.trainable_variables(scope='wavenet')
+        optimizer = optimizer_factory[args.optimizer](
+                    learning_rate=args.learning_rate,
+                    momentum=args.momentum)
+        optim = optimizer.minimize(loss, var_list=G_variables)
+
+        # main GAN training loop
+        for step in range(NUM_EPOCHS):
+            batch_data = []
+            label_data = []
+
+            # train D on real
+            for d_index in range(batch_size):
+                data = sess.run(reader.dequeue(1))
+                data = data[0]
+
+                d_real_data = process(data, quantization_channels)
+
+                batch_data.append(d_real_data)
+                label_data.append(1)
+
+            feed_dict = fill_feed_dict(batch_data, label_data, inputs_placeholder, labels_placeholder)
+
+            _, d_real_loss = sess.run([train_op, loss], feed_dict=feed_dict)
+            
+            print("Real loss")
+            print(d_real_loss)
+
+            batch_data = []
+            label_data = []
+
+            # train D on fake
+            for d_index in range(batch_size):
+                samples = tf.placeholder(tf.int32)
+
+                if args.fast_generation:
+                    next_sample = G.predict_proba_incremental(samples, args.gc_id)
+                else:
+                    next_sample = G.predict_proba(samples, args.gc_id)
+
+                if args.fast_generation:
+                    sess.run(tf.global_variables_initializer())
+                    sess.run(G.init_ops)
+                
+                waveform = [0]
+
+                for step in range(ffnn.INPUT_SIZE):
+                    if args.fast_generation:
+                        outputs = [next_sample]
+                        outputs.extend(G.push_ops)
+                        window = waveform[-1]
+                    else:
+                        if len(waveform) > G.receptive_field:
+                            window = waveform[-G.receptive_field:]
+                        else:
+                            window = waveform
+                        outputs = [next_sample]
+
+                    # Run the WaveNet to predict the next sample.
+                    prediction = sess.run(outputs, feed_dict={samples: window})[0]
+
+                    # Scale prediction distribution using temperature.
+                    np.seterr(divide='ignore')
+                    scaled_prediction = np.log(prediction) / 1
+                    scaled_prediction = (scaled_prediction -
+                                         np.logaddexp.reduce(scaled_prediction))
+                    scaled_prediction = np.exp(scaled_prediction)
+                    np.seterr(divide='warn')
+
+                    sample = np.random.choice(
+                        np.arange(quantization_channels), p=scaled_prediction)
+                    waveform.append(sample)
+
+                del waveform[0]
+
+                d_fake_data = process(waveform, quantization_channels)
+
+                batch_data.append(d_fake_data)
+                label_data.append(0)
+
+            feed_dict = fill_feed_dict(batch_data, label_data, inputs_placeholder, labels_placeholder)
+
+            _, d_fake_loss = sess.run([train_op, loss], feed_dict=feed_dict)
+
+            print("Fake loss")
+            print(d_fake_loss)
+
+            batch_data = []
+            label_data = []
+
+            # train G, but don't train D
+            for g_index in range(batch_size):
+                samples = tf.placeholder(tf.int32)
+
+                if args.fast_generation:
+                    next_sample = G.predict_proba_incremental(samples, args.gc_id)
+                else:
+                    next_sample = G.predict_proba(samples, args.gc_id)
+
+                if args.fast_generation:
+                    sess.run(tf.global_variables_initializer())
+                    sess.run(G.init_ops)
+                
+                waveform = [0]
+
+                for step in range(ffnn.INPUT_SIZE):
+                    if args.fast_generation:
+                        outputs = [next_sample]
+                        outputs.extend(G.push_ops)
+                        window = waveform[-1]
+                    else:
+                        if len(waveform) > G.receptive_field:
+                            window = waveform[-G.receptive_field:]
+                        else:
+                            window = waveform
+                        outputs = [next_sample]
+
+                    # Run the WaveNet to predict the next sample.
+                    prediction = sess.run(outputs, feed_dict={samples: window})[0]
+
+                    # Scale prediction distribution using temperature.
+                    np.seterr(divide='ignore')
+                    scaled_prediction = np.log(prediction) / 1
+                    scaled_prediction = (scaled_prediction -
+                                         np.logaddexp.reduce(scaled_prediction))
+                    scaled_prediction = np.exp(scaled_prediction)
+                    np.seterr(divide='warn')
+
+                    sample = np.random.choice(
+                        np.arange(quantization_channels), p=scaled_prediction)
+                    waveform.append(sample)
+
+                del waveform[0]
+
+                g_data = process(waveform, quantization_channels)
+
+                batch_data.append(g_data)
+                label_data.append(1)
+
+            feed_dict = fill_feed_dict(batch_data, label_data, inputs_placeholder, labels_placeholder)
+            
+            _, g_loss = sess.run([optim, loss], feed_dict=feed_dict)
+
+            print("Generator loss")
+            print(g_loss)
+
+        '''
         # variables for GAN
         X = tf.placeholder(tf.float32, shape=[None, ffnn.INPUT_SIZE], name='X')
         G_sample = tf.placeholder(tf.float32, shape=[None, ffnn.INPUT_SIZE], name='X')
@@ -412,13 +558,13 @@ def main():
         G_loss = -tf.reduce_mean(tf.log(D_fake))
 
         D_variables = tf.trainable_variables(scope='discriminator')
-        G_variables = tf.trainable_variables(scope='generator')
+        G_variables = tf.trainable_variables(scope='wavenet')
 
         D_solver = tf.train.AdamOptimizer().minimize(D_loss, var_list=D_variables)
         G_solver = tf.train.AdamOptimizer().minimize(G_loss, var_list=G_variables)
 
         # main GAN training loop
-        for step in NUM_EPOCHS:
+        for step in range(NUM_EPOCHS):
             start_time = time.time()
 
             # pull data from real
@@ -477,7 +623,7 @@ def main():
             total_loss = total_loss + loss_value
 
             print('Step %d: D loss = %.7f, G loss = %.7f (%.3f sec)' % (step, D_loss_curr, G_loss_curr, duration))
-
+        '''
 
 if __name__ == '__main__':
     main()
