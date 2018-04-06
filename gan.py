@@ -103,6 +103,28 @@ def load(saver, sess, logdir):
         print(" No checkpoint found.")
         return None
 
+def standardize(samples):
+    mean = np.mean(samples)
+    std = np.std(samples)
+    
+    standardized = []
+
+    for d in samples:
+        standardized.append(float(d-mean)/std)
+
+    return standardized
+
+def normalize(samples):
+    maximum = np.max(samples)
+    minimum = np.min(samples)
+
+    normalized = []
+
+    for d in samples:
+        normalized.append((d-minimum) * float(1/(maximum - minimum)))
+
+    return normalized
+
 def manual_mu_law_encode(signal, quantization_channels):
     # Manual mu-law companding and mu-bits quantization
     mu = quantization_channels - 1
@@ -115,6 +137,13 @@ def manual_mu_law_encode(signal, quantization_channels):
     quantized_signal = signal.astype(np.int32)
 
     return quantized_signal
+
+def process(samples, quantization_channels):
+    encoded = manual_mu_law_encode(samples, quantization_channels)
+    standardized = standardize(encoded)
+    normalized = normalize(standardized)
+
+    return normalized
 
 def get_arguments():
     def _str_to_bool(s):
@@ -248,6 +277,12 @@ def main():
 
         args = get_arguments()
 
+        # Load parameters from wavenet params json file
+        with open(args.wavenet_params, 'r') as f:
+            wavenet_params = json.load(f)  
+
+        quantization_channels = wavenet_params['quantization_channels']
+
         if args.restore_from != None:
             restore_from = args.restore_from
             print("Restoring from: ")
@@ -308,28 +343,10 @@ def main():
                         data = sess.run(reader2.dequeue(1))
                 data = np.array(data[0])
 
-                # mu law encode
-                encoded = manual_mu_law_encode(data, 256)
+                # processing
+                samples = process(data, quantization_channels)
 
-                # standardize
-                mean = np.mean(encoded)
-                std = np.std(encoded)
-
-                standardized = []
-
-                for d in encoded:
-                    standardized.append(float(d-mean)/std)
-
-                # normalize
-                maximum = np.max(standardized)
-                minimum = np.min(standardized)
-
-                normalized = []
-
-                for d in standardized:
-                    normalized.append((d-minimum) * float(1/(maximum - minimum)))
-
-                batch_data.append(normalized)
+                batch_data.append(samples)
                 label_data.append(label)
 
             feed_dict = fill_feed_dict(batch_data, label_data, inputs_placeholder, labels_placeholder)
@@ -354,24 +371,6 @@ def main():
         # Lambda for white noise sampler
         gi_sampler = get_generator_input_sampler()
 
-        # White noise generation and verification
-
-        # White noise generator params
-        white_mean = 0
-        white_sigma = 1
-        white_length = 20234
-
-        white_noise = gi_sampler(white_mean, white_sigma, white_length)
-        if args.view_initial_white:
-            plt.plot(white_noise)
-            plt.ylabel('Amplitude')
-            plt.xlabel('Time')
-            plt.show()
-
-        # Load parameters from wavenet params json file
-        with open(args.wavenet_params, 'r') as f:
-            wavenet_params = json.load(f)  
-
         # Intialize generator WaveNet
         G = WaveNetModel(
             batch_size=1,
@@ -383,9 +382,6 @@ def main():
             quantization_channels=wavenet_params["quantization_channels"],
             use_biases=wavenet_params["use_biases"],
             initial_filter_width=wavenet_params["initial_filter_width"])
-
-        # Calculate loss for white noise input
-        result = G.loss(input_batch=tf.convert_to_tensor(white_noise, dtype=np.float32), name='generator')
         
         init = tf.global_variables_initializer()
         sess.run(init)
@@ -399,101 +395,89 @@ def main():
 
         white_noise = gi_sampler(white_mean, white_sigma, white_length)
 
+        # initialize generator
         loss = G.loss(input_batch=tf.convert_to_tensor(white_noise, dtype=np.float32), name='generator')
-
-        samples = tf.placeholder(tf.int32)
-
-        if args.fast_generation:
-            next_sample = G.predict_proba_incremental(samples, args.gc_id)
-        else:
-            next_sample = G.predict_proba(samples, args.gc_id)
-
-        if args.fast_generation:
-            sess.run(tf.global_variables_initializer())
-            sess.run(G.init_ops)
-
-        decode = mu_law_decode(samples, wavenet_params['quantization_channels'])
-
-        quantization_channels = wavenet_params['quantization_channels']
         
-        '''
-        # Silence with a single random sample at the end.
-        waveform = [quantization_channels / 2] * (net.receptive_field - 1)
-        waveform.append(np.random.randint(quantization_channels))
-        '''
-        waveform = [0]
-
-        last_sample_timestamp = datetime.now()
-        for step in range(15117):
-            if args.fast_generation:
-                outputs = [next_sample]
-                outputs.extend(G.push_ops)
-                window = waveform[-1]
-            else:
-                if len(waveform) > G.receptive_field:
-                    window = waveform[-G.receptive_field:]
-                else:
-                    window = waveform
-                outputs = [next_sample]
-
-            # Run the WaveNet to predict the next sample.
-            prediction = sess.run(outputs, feed_dict={samples: window})[0]
-
-            # Scale prediction distribution using temperature.
-            np.seterr(divide='ignore')
-            scaled_prediction = np.log(prediction) / 1
-            scaled_prediction = (scaled_prediction -
-                                 np.logaddexp.reduce(scaled_prediction))
-            scaled_prediction = np.exp(scaled_prediction)
-            np.seterr(divide='warn')
-
-            sample = np.random.choice(
-                np.arange(quantization_channels), p=scaled_prediction)
-            waveform.append(sample)
-
-        del waveform[0]
-        print(waveform)
-
-        '''
+        # variables for GAN
         X = tf.placeholder(tf.float32, shape=[None, ffnn.INPUT_SIZE], name='X')
+        G_sample = tf.placeholder(tf.float32, shape=[None, ffnn.INPUT_SIZE], name='X')
 
         D_logit_real = ffnn.inference(X, hidden1_units, hidden2_units, hidden3_units, hidden4_units, hidden5_units)
         D_real = tf.nn.sigmoid(D_logit_real)
 
-        D_logit_fake = ffnn.inference(G_sample[0], hidden1_units, hidden2_units, hidden3_units, hidden4_units, hidden5_units)
+        D_logit_fake = ffnn.inference(G_sample, hidden1_units, hidden2_units, hidden3_units, hidden4_units, hidden5_units)
         D_fake = tf.nn.sigmoid(D_logit_fake)
 
         D_loss = -tf.reduce_mean(tf.log(D_real) + tf.log(1. - D_fake))
         G_loss = -tf.reduce_mean(tf.log(D_fake))
 
         D_variables = tf.trainable_variables(scope='discriminator')
-        G_variables = tf.trainable_variables(scope='wavenet')
+        G_variables = tf.trainable_variables(scope='generator')
 
         D_solver = tf.train.AdamOptimizer().minimize(D_loss, var_list=D_variables)
         G_solver = tf.train.AdamOptimizer().minimize(G_loss, var_list=G_variables)
 
+        # main GAN training loop
         for step in NUM_EPOCHS:
-            X_mb = []
+            start_time = time.time()
 
+            # pull data from real
             data = sess.run(reader.dequeue(1))
+            data = data[0]
 
-            while (len(data[0]) < ffnn.INPUT_SIZE):
-                data = sess.run(reader.dequeue(1))
+            X_mb = process(data, quantization_channels)
 
-            data = np.array(data[0])
-            mean = np.mean(data)
-            std = np.std(data)
+            # generate waveform from Generator
+            if args.fast_generation:
+                next_sample = G.predict_proba_incremental(samples, args.gc_id)
+            else:
+                next_sample = G.predict_proba(samples, args.gc_id)
 
-            standardized = []
+            if args.fast_generation:
+                sess.run(tf.global_variables_initializer())
+                sess.run(G.init_ops)
+            
+            waveform = [0]
 
-            for d in data:
-                standardized.append(float(d-mean)/std)
+            samples = tf.placeholder(tf.int32)
 
-            X_mb.append(standardized)
+            for step in range(ffnn.INPUT_SIZE):
+                if args.fast_generation:
+                    outputs = [next_sample]
+                    outputs.extend(G.push_ops)
+                    window = waveform[-1]
+                else:
+                    if len(waveform) > G.receptive_field:
+                        window = waveform[-G.receptive_field:]
+                    else:
+                        window = waveform
+                    outputs = [next_sample]
 
-            _, D_loss_curr = sess.run([D_solver, D_loss], feed_dict={X: X_mb})
-            _, G_loss_curr = sess.run([G_solver, G_loss])
-        '''        
+                # Run the WaveNet to predict the next sample.
+                prediction = sess.run(outputs, feed_dict={samples: window})[0]
+
+                # Scale prediction distribution using temperature.
+                np.seterr(divide='ignore')
+                scaled_prediction = np.log(prediction) / 1
+                scaled_prediction = (scaled_prediction -
+                                     np.logaddexp.reduce(scaled_prediction))
+                scaled_prediction = np.exp(scaled_prediction)
+                np.seterr(divide='warn')
+
+                sample = np.random.choice(
+                    np.arange(quantization_channels), p=scaled_prediction)
+                waveform.append(sample)
+
+            del waveform[0]
+
+            _, D_loss_curr = sess.run([D_solver, D_loss], feed_dict={X: X_mb, G_sample: waveform})
+            _, G_loss_curr = sess.run([G_solver, G_loss], feed_dict={G_sample: waveform})    
+
+            duration = time.time() - start_time
+            total_loss = total_loss + loss_value
+
+            print('Step %d: D loss = %.7f, G loss = %.7f (%.3f sec)' % (step, D_loss_curr, G_loss_curr, duration))
+
 
 if __name__ == '__main__':
     main()
