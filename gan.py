@@ -138,12 +138,24 @@ def manual_mu_law_encode(signal, quantization_channels):
 
     return quantized_signal
 
-def process(samples, quantization_channels):
-    encoded = manual_mu_law_encode(samples, quantization_channels)
+def process(samples, quantization_channels, encode):
+    if encode:
+        encoded = manual_mu_law_encode(samples, quantization_channels)
+    else:
+        encoded = samples
+    '''
     standardized = standardize(encoded)
     normalized = normalize(standardized)
 
     return normalized
+    '''
+
+    # normalized = normalize(encoded)
+    # standardized = standardize(normalized)
+
+    standardized = standardize(encoded)
+
+    return standardized
 
 def get_arguments():
     def _str_to_bool(s):
@@ -254,7 +266,7 @@ def main():
         hidden3_units = 1300
         hidden4_units = 650
         hidden5_units = 325
-        max_training_steps = 5
+        max_training_steps = 1
 
         global_step = tf.Variable(0, name='global_step', trainable=False)
         initial_training_learning_rate = 3e-2
@@ -310,12 +322,12 @@ def main():
 
         # Training data 
         directory = './sampleTrue'
-        reader = AudioReader(directory, coord, sample_rate = 16000, gc_enabled=False, receptive_field=5117, sample_size=10000, silence_threshold=0.05)
+        reader = AudioReader(directory, coord, sample_rate = 16000, gc_enabled=False, receptive_field=5117, sample_size=15117, silence_threshold=0.05)
         threads = tf.train.start_queue_runners(sess=sess, coord=coord)
         reader.start_threads(sess)
 
         directory = './sampleFalse'
-        reader2 = AudioReader(directory, coord, sample_rate = 16000, gc_enabled=False, receptive_field=5117, sample_size=10000, silence_threshold=0.05)
+        reader2 = AudioReader(directory, coord, sample_rate = 16000, gc_enabled=False, receptive_field=5117, sample_size=15117, silence_threshold=0.05)
         threads2 = tf.train.start_queue_runners(sess=sess, coord=coord)
         reader2.start_threads(sess)
 
@@ -341,9 +353,15 @@ def main():
                     while (len(data[0]) < ffnn.INPUT_SIZE):
                         data = sess.run(reader2.dequeue(1))
                 data = np.array(data[0])
+                
+                cut = []
+                for i in range(ffnn.INPUT_SIZE):
+                    cut.append(data[i])
+
+                data = cut
 
                 # processing
-                samples = process(data, quantization_channels)
+                samples = process(data, quantization_channels, 1)
 
                 batch_data.append(samples)
                 label_data.append(label)
@@ -381,27 +399,29 @@ def main():
             quantization_channels=wavenet_params["quantization_channels"],
             use_biases=wavenet_params["use_biases"],
             initial_filter_width=wavenet_params["initial_filter_width"])
-        
-        init = tf.global_variables_initializer()
-        sess.run(init)
-
-        gi_sampler = get_generator_input_sampler()
 
         # White noise generator params
         white_mean = 0
         white_sigma = 1
-        white_length = 20234
+        white_length = ffnn.INPUT_SIZE
 
         white_noise = gi_sampler(white_mean, white_sigma, white_length)
+        white_noise = process(white_noise, quantization_channels, 1)
+        white_noise_t = tf.convert_to_tensor(white_noise)
 
         # initialize generator
-        g_loss = G.loss(input_batch=tf.convert_to_tensor(white_noise, dtype=np.float32), name='generator')
-        
+        w_loss, w_prediction = G.loss(input_batch=white_noise_t, name='generator')
+
         G_variables = tf.trainable_variables(scope='wavenet')
         optimizer = optimizer_factory[args.optimizer](
-                    learning_rate=args.learning_rate,
+                    learning_rate=3e-2,
                     momentum=args.momentum)
-        optim = optimizer.minimize(loss, var_list=G_variables)
+        optim = optimizer.minimize(w_loss, var_list=G_variables)
+
+        init = tf.global_variables_initializer()
+        sess.run(init)
+
+        print(sess.run(tf.shape(w_prediction)))
 
         # main GAN training loop
         for step in range(NUM_EPOCHS):
@@ -413,7 +433,7 @@ def main():
                 data = sess.run(reader.dequeue(1))
                 data = data[0]
 
-                d_real_data = process(data, quantization_channels)
+                d_real_data = process(data, quantization_channels, 1)
 
                 batch_data.append(d_real_data)
                 label_data.append(1)
@@ -472,7 +492,7 @@ def main():
 
                 del waveform[0]
 
-                d_fake_data = process(waveform, quantization_channels)
+                d_fake_data = process(waveform, quantization_channels, 0)
 
                 batch_data.append(d_fake_data)
                 label_data.append(0)
@@ -531,7 +551,7 @@ def main():
 
                 del waveform[0]
 
-                g_data = process(waveform, quantization_channels)
+                g_data = process(waveform, quantization_channels, 0)
 
                 batch_data.append(g_data)
                 label_data.append(1)

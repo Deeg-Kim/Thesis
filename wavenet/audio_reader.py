@@ -12,7 +12,6 @@ import tensorflow as tf
 
 FILE_PATTERN = r'p([0-9]+)_([0-9]+)\.m4a'
 
-
 def get_category_cardinality(files):
     id_reg_expression = re.compile(FILE_PATTERN)
     min_id = None
@@ -47,7 +46,7 @@ def load_generic_audio(directory, sample_rate):
     '''Generator that yields audio waveforms from the directory.'''
     files = find_files(directory)
     id_reg_exp = re.compile(FILE_PATTERN)
-    print("files length: {}".format(len(files)))
+    print("number of files found : {}".format(len(files)))
     randomized_files = randomize_files(files)
     for filename in randomized_files:
         ids = id_reg_exp.findall(filename)
