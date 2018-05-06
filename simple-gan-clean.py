@@ -35,27 +35,12 @@ def standardize(samples):
 
     return standardized
 
-def normalize(samples):
-    maximum = np.max(samples)
-    minimum = np.min(samples)
-
-    normalized = []
-
-    for d in samples:
-        normalized.append((d-minimum) * float(1/(maximum - minimum)))
-
-    return normalized
-
 def process(samples):
-    # standardized = standardize(samples)
-
-    quick = []
+    reshape = []
     for d in samples:
-        quick.append(d[0])
+        reshape.append(d[0])
 
-    standardized = quick
-
-    return standardized
+    return reshape
 
 def write_wav(waveform, sample_rate, filename):
     y = np.array(waveform)
@@ -69,16 +54,6 @@ w4 = 11001
 w5 = 7334
 w6 = 3667
 w7 = 1
-
-'''
-w1 = 11000
-w2 = 8000
-w3 = 4000
-w4 = 2000
-w5 = 1000
-w6 = 500
-w7 = 1
-'''
 
 # Discriminator Net
 X = tf.placeholder(tf.float32, shape=[None, w1], name='X')
@@ -179,7 +154,6 @@ reader.start_threads(sess)
 init = tf.global_variables_initializer()
 sess.run(init)
 
-prevA = []
 for it in range(1000):
     batch_data = []
 
@@ -198,24 +172,6 @@ for it in range(1000):
 
     for d_batch in range(1):
         _, D_loss_curr = sess.run([D_solver, D_loss], feed_dict={X: batch_data, Z: sample_Z(1, 100)})
-
-    '''
-    waveform = np.reshape(sess.run(G_sample, feed_dict={Z: sample_Z(1, 100)}), [w1])
-    print(waveform)
-    nextA = []
-    for i in range(22000):
-        nextA.append(waveform[i])
-
-    print("real logit")
-    print(sess.run(D_real, feed_dict={X: batch_data, Z: sample_Z(1, 100)}))
-
-    print("fake logit")
-    print(sess.run(D_fake, feed_dict={Z: sample_Z(1, 100)}))
-
-    print("Equal?")
-    print(np.array_equal(prevA, nextA))
-    prevA = nextA
-    '''
     
     duration = time.time() - start_time
 
@@ -223,10 +179,8 @@ for it in range(1000):
         waveform = []
         waveform = np.reshape(sess.run(G_sample, feed_dict={Z: sample_Z(1, 100)}), [w1])
         print(waveform)
-        name = '5-3-2simplegenerate-' + str(it) + '.wav'
+        name = 'simplegenerate-' + str(it) + '.wav'
         write_wav(waveform, 22000, name)
-
-    print('Step %d: 1st D loss = %.7f, 10th G loss = %.7f (%.3f sec)' % (it, D_loss_curr, G_loss_curr, duration))
 
 samples = tf.placeholder(tf.int32)
 decode = mu_law_decode(samples, 256)
@@ -234,4 +188,4 @@ decode = mu_law_decode(samples, 256)
 waveform = []
 waveform = np.reshape(sess.run(G_sample, feed_dict={Z: sample_Z(1, 100)}), [w1])
 
-write_wav(waveform, 22000, '5-3-2simplegenerate.wav')
+write_wav(waveform, 22000, 'simplegenerate.wav')

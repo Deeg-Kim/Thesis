@@ -48,27 +48,6 @@ def placeholder_inputs(batch_size):
     labels_placeholder = tf.placeholder(tf.int32, shape=(batch_size), name='labels_placeholder')
     return inputs_placeholder, labels_placeholder
 
-def convert_dequeue_to_list(dequeued):
-    data = []
-    dequeued = dequeued[0]
-
-    for data_point in dequeued:
-        data.append(data_point[0])
-
-    return data
-
-def dequeue_to_list_standardize(dequeued):
-    data = np.array(dequeued)
-    mean = np.mean(data)
-    std = np.std(data)
-
-    standardized = []
-
-    for d in data:
-        standardized.append(float(d-mean)/std)
-
-    return standardized
-
 def fill_feed_dict(batch_data, label_data, inputs_pl, labels_pl):
     # Feed dict for placeholders from placeholder_inputs()
 
@@ -81,25 +60,6 @@ def fill_feed_dict(batch_data, label_data, inputs_pl, labels_pl):
 
 def get_generator_input_sampler():
     return lambda mu, sigma, n: np.random.normal(mu, sigma, size=[1, n])
-
-def load(saver, sess, logdir):
-    print("Trying to restore saved checkpoints from {} ...".format(logdir),
-          end="")
-
-    ckpt = tf.train.get_checkpoint_state(logdir)
-    if ckpt:
-        print("  Checkpoint found: {}".format(ckpt.model_checkpoint_path))
-        global_step = int(ckpt.model_checkpoint_path
-                          .split('/')[-1]
-                          .split('-')[-1])
-        print("  Global step was: {}".format(global_step))
-        print("  Restoring...", end="")
-        saver.restore(sess, ckpt.model_checkpoint_path)
-        print(" Done.")
-        return global_step
-    else:
-        print(" No checkpoint found.")
-        return None
 
 def standardize(samples):
     mean = np.mean(samples)
@@ -248,52 +208,17 @@ def write_wav(waveform, sample_rate, filename):
     print('Updated wav file at {}'.format(filename))
 
 def reduce_var(x, axis=None, keepdims=False):
-    """Variance of a tensor, alongside the specified axis.
-
-    # Arguments
-        x: A tensor or variable.
-        axis: An integer, the axis to compute the variance.
-        keepdims: A boolean, whether to keep the dimensions or not.
-            If `keepdims` is `False`, the rank of the tensor is reduced
-            by 1. If `keepdims` is `True`,
-            the reduced dimension is retained with length 1.
-
-    # Returns
-        A tensor with the variance of elements of `x`.
-    """
     m = tf.reduce_mean(x, axis=axis, keep_dims=True)
     devs_squared = tf.square(x - m)
     return tf.reduce_mean(devs_squared, axis=axis, keep_dims=keepdims)
 
 def reduce_std(x, axis=None, keepdims=False):
-    """Standard deviation of a tensor, alongside the specified axis.
-
-    # Arguments
-        x: A tensor or variable.
-        axis: An integer, the axis to compute the standard deviation.
-        keepdims: A boolean, whether to keep the dimensions or not.
-            If `keepdims` is `False`, the rank of the tensor is reduced
-            by 1. If `keepdims` is `True`,
-            the reduced dimension is retained with length 1.
-
-    # Returns
-        A tensor with the standard deviation of elements of `x`.
-    """
     return tf.sqrt(reduce_var(x, axis=axis, keepdims=keepdims))
 
 with tf.Graph().as_default():
     coord = tf.train.Coordinator()
     sess = tf.Session()
-
-    '''
-    w1 = 11000
-    w2 = 8000
-    w3 = 4000
-    w4 = 2000
-    w5 = 1000
-    w6 = 500
-    w7 = 1
-    '''
+    
     w1 = 22000
     w2 = 18335
     w3 = 14668

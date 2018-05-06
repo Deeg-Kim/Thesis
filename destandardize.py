@@ -35,7 +35,7 @@ reader = AudioReader(directory, coord, sample_rate = 22000, gc_enabled=False, re
 threads = tf.train.start_queue_runners(sess=sess, coord=coord)
 reader.start_threads(sess)
 
-name_in = "simplegenerate-60.wav"
+name_in = "5-3simplegenerate.wav"
 name_out = "destandardized.wav"
 
 in_data, _ = librosa.load(name_in, sr=22000)
