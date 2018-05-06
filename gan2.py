@@ -391,7 +391,7 @@ with tf.Graph().as_default():
     threads = tf.train.start_queue_runners(sess=sess, coord=coord)
     reader.start_threads(sess)
 
-    for it in range(5000):
+    for it in range(10000):
         batch_data = []
 
         start_time = time.time()
@@ -417,7 +417,7 @@ with tf.Graph().as_default():
             white_noise = gi_sampler(white_mean, white_sigma, white_length)
             waveform = []
             waveform = np.reshape(sess.run(G_sample, feed_dict={Z: white_noise}), [w1])
-            name = '5-4fullgenerate-' + str(it) + '.wav'
+            name = '5-5fullgenerate-' + str(it) + '.wav'
             write_wav(waveform, 22000, name)
 
         print('Step %d: 1st D loss = %.7f, 8th G loss = %.7f (%.3f sec)' % (it, D_loss_curr, G_loss_curr, duration))
@@ -426,4 +426,4 @@ with tf.Graph().as_default():
     white_noise = gi_sampler(white_mean, white_sigma, white_length)
     waveform = []
     waveform = np.reshape(sess.run(G_sample, feed_dict={Z: white_noise}), [w1])
-    name = '5-4fullgenerate.wav'
+    name = '5-5fullgenerate.wav'
